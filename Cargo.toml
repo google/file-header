@@ -1,8 +1,11 @@
 [package]
 name = "file-header"
+description = "Rust library to check for and add headers to files"
 version = "0.1.0"
-publish = true
 edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/google/file-header"
+keywords = ["license", "header"]
 
 [dependencies]
 thiserror = "1.0.44"
