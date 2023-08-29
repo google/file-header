@@ -40,7 +40,7 @@ fn mit() {
 
 #[test]
 fn gpl3() {
-    let license_header = GPL_3_0.build_header(YearCopyrightOwnerValue::new(
+    let license_header = GPL_3_0_ONLY.build_header(YearCopyrightOwnerValue::new(
         2023,
         "Some copyright holder".to_string(),
     ));

@@ -346,8 +346,8 @@ lazy_static! {
 }
 lazy_static! {
     /// GPL 3.0 license
-    pub static ref GPL_3_0: SpdxLicense<Gpl3Tokens> = SpdxLicense ::new(
-        Box::new(license::licenses::Gpl3_0),
+    pub static ref GPL_3_0_ONLY: SpdxLicense<Gpl3Tokens> = SpdxLicense ::new(
+        Box::new(license::licenses::Gpl3_0Only),
          "GNU General Public License".to_string(),
          10
     );
