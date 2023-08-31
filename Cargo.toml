@@ -1,13 +1,14 @@
 [package]
 name = "file-header"
 description = "Rust library to check for and add headers to files"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/google/file-header"
 keywords = ["license", "header"]
 categories = ["development-tools"]
 rust-version = "1.65.0"
+documentation = "https://docs.rs/crate/file-header"
 
 [dependencies]
 thiserror = "1.0.44"
@@ -24,5 +25,6 @@ tempfile = "3.7.0"
 globset = "0.4.11"
 
 [features]
-default = ["spdx"]
+default = ["spdx", "license-offline"]
+license-offline = ["license/offline"]
 spdx = ["dep:license", "dep:lazy_static"]
