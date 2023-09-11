@@ -15,7 +15,7 @@ thiserror = "1.0.44"
 crossbeam = "0.8.2"
 walkdir = "2.3.3"
 lazy_static = { version = "1.4.0", optional = true }
-license = { version = "3.1.1", optional = true }
+license = { version = "3.1.1", optional = true}
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--generate-link-to-definition"]
@@ -27,4 +27,4 @@ globset = "0.4.11"
 [features]
 default = ["spdx", "license-offline"]
 license-offline = ["license/offline"]
-spdx = ["dep:license", "dep:lazy_static"]
+spdx = ["license", "dep:lazy_static"]
