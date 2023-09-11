@@ -26,5 +26,5 @@ globset = "0.4.11"
 
 [features]
 default = ["spdx", "license-offline"]
-license-offline = ["license/offline"]
-spdx = ["license", "dep:lazy_static"]
+license-offline = ["license?/offline"]
+spdx = ["dep:license", "dep:lazy_static"]
