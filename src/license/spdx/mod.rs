@@ -159,6 +159,7 @@ pub use license;
 mod tests;
 
 /// A boxed `license::License`.
+// Including the `Send` trait for compatibility with crates that use `lazy_static` with the `spin_no_std` feature.
 type BoxedLicense = Box<dyn license::License + Sync + Send>;
 
 /// Metadata around an SPDX license to enable constructing a [Header].
