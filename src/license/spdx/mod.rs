@@ -159,7 +159,7 @@ pub use license;
 mod tests;
 
 /// A boxed `license::License`.
-type BoxedLicense = Box<dyn license::License + Sync>;
+type BoxedLicense = Box<dyn license::License + Sync + Send>;
 
 /// Metadata around an SPDX license to enable constructing a [Header].
 ///
