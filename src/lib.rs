@@ -115,12 +115,52 @@ impl<C: HeaderChecker> Header<C> {
         f.write_all(after_header.as_bytes()).map_err(err_mapper)?;
         Ok(true)
     }
+
+    /// Delete the header, with appropriate formatting for the type of file indicated by `p`'s
+    /// extension, if the header is already present.
+    /// Returns `true` if the header was deleted.
+    pub fn delete_header_if_present(&self, p: &path::Path) -> Result<bool, DeleteHeaderError> {
+        let err_mapper = |e| DeleteHeaderError::IoError(p.to_path_buf(), e);
+        let contents = fs::read_to_string(p).map_err(err_mapper)?;
+        if !self
+            .header_present(&mut contents.as_bytes())
+            .map_err(err_mapper)?
+        {
+            return Ok(false);
+        }
+        let mut effective_header = header_delimiters(p)
+            .ok_or_else(|| DeleteHeaderError::UnrecognizedExtension(p.to_path_buf()))
+            .map(|d| wrap_header(&self.header, d))?;
+        // include the newline separator
+        effective_header.push('\n');
+        // remove the header
+        let remainder = contents.replace(&effective_header, "");
+        // write the remainder
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(p)
+            .map_err(err_mapper)?;
+        f.write_all(remainder.as_bytes()).map_err(err_mapper)?;
+        Ok(true)
+    }
 }
 
 /// Errors that can occur when adding a header
 #[derive(Debug, thiserror::Error)]
 pub enum AddHeaderError {
     /// IO error while adding the header to the path
+    #[error("I/O error at {0:?}: {1}")]
+    IoError(path::PathBuf, io::Error),
+    /// The file at the path had an unrecognized extension
+    #[error("Unknown file extension: {0:?}")]
+    UnrecognizedExtension(path::PathBuf),
+}
+
+/// Errors that can occur when deleting a header
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteHeaderError {
+    /// IO error while deleting the header from the path
     #[error("I/O error at {0:?}: {1}")]
     IoError(path::PathBuf, io::Error),
     /// The file at the path had an unrecognized extension
@@ -330,6 +370,53 @@ pub fn add_headers_recursively(
 #[derive(Debug, thiserror::Error)]
 pub enum AddHeadersRecursivelyError {
     /// An I/O error occurred while adding the header to the path
+    #[error("I/O error at {0:?}: {1}")]
+    IoError(path::PathBuf, io::Error),
+    /// `walkdir` could not navigate the directory structure
+    #[error("Walkdir error: {0}")]
+    WalkdirError(#[from] walkdir::Error),
+    /// A file with an unrecognized extension was encountered at the path
+    #[error("Unknown file extension: {0:?}")]
+    UnrecognizedExtension(path::PathBuf),
+}
+
+/// Delete the provided `header` from any file in `root` that matches `path_predicate` and that
+/// already has a header as determined by `checker`.
+/// Returns a list of paths that had headers removed.
+pub fn delete_headers_recursively(
+    root: &path::Path,
+    path_predicate: impl Fn(&path::Path) -> bool,
+    header: Header<impl HeaderChecker>,
+) -> Result<Vec<path::PathBuf>, DeleteHeadersRecursivelyError> {
+    let (path_tx, path_rx) = crossbeam::channel::unbounded::<path::PathBuf>();
+    find_files(root, path_predicate, path_tx)?;
+    path_rx
+        .into_iter()
+        // keep the errors, or the ones with removed headers
+        .filter_map(|p| {
+            match header.delete_header_if_present(&p).map_err(|e| match e {
+                DeleteHeaderError::IoError(p, e) => DeleteHeadersRecursivelyError::IoError(p, e),
+                DeleteHeaderError::UnrecognizedExtension(e) => {
+                    DeleteHeadersRecursivelyError::UnrecognizedExtension(e)
+                }
+            }) {
+                Ok(removed) => {
+                    if removed {
+                        Some(Ok(p))
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => Some(Err(e)),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+}
+
+/// Errors that can occur when adding a header recursively
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteHeadersRecursivelyError {
+    /// An I/O error occurred while removing the header from the path
     #[error("I/O error at {0:?}: {1}")]
     IoError(path::PathBuf, io::Error),
     /// `walkdir` could not navigate the directory structure
