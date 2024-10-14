@@ -11,18 +11,19 @@ rust-version = "1.65.0"
 documentation = "https://docs.rs/crate/file-header"
 
 [dependencies]
-thiserror = "1.0.44"
-crossbeam = "0.8.2"
-walkdir = "2.3.3"
-lazy_static = { version = "1.4.0", optional = true }
-license = { version = "3.1.1", optional = true}
+thiserror = "1.0.64"
+crossbeam = "0.8.4"
+walkdir = "2.5.0"
+lazy_static = { version = "1.5.0", optional = true }
+# 3.5.1 would require 1.81 for core::error::Error, but we only require 1.65.0
+license = { version = "=3.5.0", optional = true}
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--generate-link-to-definition"]
 
 [dev-dependencies]
-tempfile = "3.7.0"
-globset = "0.4.11"
+tempfile = "3.13.0"
+globset = "0.4.15"
 
 [features]
 default = ["spdx", "license-offline"]
