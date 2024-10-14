@@ -58,7 +58,9 @@ pub mod license;
 /// A file header to check for, or add to, files.
 #[derive(Clone)]
 pub struct Header<C: HeaderChecker> {
+    /// A checker to determine if the desired header is already present.
     checker: C,
+    /// The header text to add, without comments or other filetype-specific framing.
     header: String,
 }
 
@@ -115,12 +117,60 @@ impl<C: HeaderChecker> Header<C> {
         f.write_all(after_header.as_bytes()).map_err(err_mapper)?;
         Ok(true)
     }
+
+    /// Delete the header, with appropriate formatting for the type of file indicated by `p`'s
+    /// extension, if the header is already present.
+    /// Returns `true` if the header was deleted.
+    pub fn delete_header_if_present(&self, p: &path::Path) -> Result<bool, DeleteHeaderError> {
+        let err_mapper = |e| DeleteHeaderError::IoError(p.to_path_buf(), e);
+        let contents = fs::read_to_string(p).map_err(err_mapper)?;
+        if !self
+            .header_present(&mut contents.as_bytes())
+            .map_err(err_mapper)?
+        {
+            return Ok(false);
+        }
+        let mut effective_header = header_delimiters(p)
+            .ok_or_else(|| DeleteHeaderError::UnrecognizedExtension(p.to_path_buf()))
+            .map(|d| wrap_header(&self.header, d))?;
+        // include the newline separator appended by add_header_if_missing()
+        effective_header.push('\n');
+
+        // the checker is conservative: it may look for only a substring of the license, but
+        // deletion will only have an effect if the entire wrapped header is present.
+        if !contents.contains(&effective_header) {
+            return Ok(false);
+        }
+
+        // remove the first copy of the header to avoid touching the license text in a string
+        // literal, etc.
+        let remainder = contents.replacen(&effective_header, "", 1);
+        // write the remainder
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(p)
+            .map_err(err_mapper)?;
+        f.write_all(remainder.as_bytes()).map_err(err_mapper)?;
+        Ok(true)
+    }
 }
 
 /// Errors that can occur when adding a header
 #[derive(Debug, thiserror::Error)]
 pub enum AddHeaderError {
     /// IO error while adding the header to the path
+    #[error("I/O error at {0:?}: {1}")]
+    IoError(path::PathBuf, io::Error),
+    /// The file at the path had an unrecognized extension
+    #[error("Unknown file extension: {0:?}")]
+    UnrecognizedExtension(path::PathBuf),
+}
+
+/// Errors that can occur when deleting a header
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteHeaderError {
+    /// IO error while deleting the header from the path
     #[error("I/O error at {0:?}: {1}")]
     IoError(path::PathBuf, io::Error),
     /// The file at the path had an unrecognized extension
@@ -307,24 +357,9 @@ pub fn add_headers_recursively(
     header: Header<impl HeaderChecker>,
 ) -> Result<Vec<path::PathBuf>, AddHeadersRecursivelyError> {
     // likely no need for threading since adding headers is only done occasionally
-    let (path_tx, path_rx) = crossbeam::channel::unbounded::<path::PathBuf>();
-    find_files(root, path_predicate, path_tx)?;
-    path_rx
-        .into_iter()
-        // keep the errors, or the ones with added headers
-        .filter_map(
-            |p| match header.add_header_if_missing(&p).map_err(|e| e.into()) {
-                Ok(added) => {
-                    if added {
-                        Some(Ok(p))
-                    } else {
-                        None
-                    }
-                }
-                Err(e) => Some(Err(e)),
-            },
-        )
-        .collect::<Result<Vec<_>, _>>()
+    recursive_optional_operation(root, path_predicate, |p| {
+        header.add_header_if_missing(p).map_err(|e| e.into())
+    })
 }
 
 /// Errors that can occur when adding a header recursively
@@ -350,6 +385,43 @@ impl From<AddHeaderError> for AddHeadersRecursivelyError {
     }
 }
 
+/// Delete the provided `header` from any file in `root` that matches `path_predicate` and that
+/// already has a header as determined by `header`'s checker.
+///
+/// Returns a list of paths that had headers removed.
+pub fn delete_headers_recursively(
+    root: &path::Path,
+    path_predicate: impl Fn(&path::Path) -> bool,
+    header: Header<impl HeaderChecker>,
+) -> Result<Vec<path::PathBuf>, DeleteHeadersRecursivelyError> {
+    recursive_optional_operation(root, path_predicate, |p| {
+        header.delete_header_if_present(p).map_err(|e| e.into())
+    })
+}
+
+/// Errors that can occur when adding a header recursively
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteHeadersRecursivelyError {
+    /// An I/O error occurred while removing the header from the path
+    #[error("I/O error at {0:?}: {1}")]
+    IoError(path::PathBuf, io::Error),
+    /// `walkdir` could not navigate the directory structure
+    #[error("Walkdir error: {0}")]
+    WalkdirError(#[from] walkdir::Error),
+    /// A file with an unrecognized extension was encountered at the path
+    #[error("Unknown file extension: {0:?}")]
+    UnrecognizedExtension(path::PathBuf),
+}
+
+impl From<DeleteHeaderError> for DeleteHeadersRecursivelyError {
+    fn from(value: DeleteHeaderError) -> Self {
+        match value {
+            DeleteHeaderError::IoError(p, e) => Self::IoError(p, e),
+            DeleteHeaderError::UnrecognizedExtension(p) => Self::UnrecognizedExtension(p),
+        }
+    }
+}
+
 /// Find all files starting from `root` that do not match the globs in `ignore`, publishing the
 /// resulting paths into `dest`.
 fn find_files(
@@ -369,6 +441,8 @@ fn find_files(
 
 /// Prepare a header for inclusion in a particular file syntax by wrapping it with
 /// comment characters as per the provided `delim`.
+///
+/// Trailing whitespace will be removed to avoid linters disliking the resulting text.
 fn wrap_header(orig_header: &str, delim: HeaderDelimiters) -> String {
     let mut out = String::new();
     if !delim.first_line.is_empty() {
@@ -456,3 +530,33 @@ const MAGIC_FIRST_LINES: [&str; 8] = [
     "# escape", // Dockerfile directive https://docs.docker.com/engine/reference/builder/#parser-directives
     "# syntax", // Dockerfile directive https://docs.docker.com/engine/reference/builder/#parser-directives
 ];
+
+/// Apply `operation` to each discovered path in `root` that passes `path_predicate`.
+///
+/// Return the paths for which `operation` took action, as indicated by `operation` returning
+/// `true`.
+fn recursive_optional_operation<E>(
+    root: &path::Path,
+    path_predicate: impl Fn(&path::Path) -> bool,
+    operation: impl Fn(&path::Path) -> Result<bool, E>,
+) -> Result<Vec<path::PathBuf>, E>
+where
+    E: From<walkdir::Error>,
+{
+    let (path_tx, path_rx) = crossbeam::channel::unbounded::<path::PathBuf>();
+    find_files(root, path_predicate, path_tx)?;
+    path_rx
+        .into_iter()
+        // keep the paths for which the operation took action, and the errors
+        .filter_map(|p| match operation(&p) {
+            Ok(operation_applied) => {
+                if operation_applied {
+                    Some(Ok(p))
+                } else {
+                    None
+                }
+            }
+            Err(e) => Some(Err(e)),
+        })
+        .collect::<Result<Vec<_>, _>>()
+}
