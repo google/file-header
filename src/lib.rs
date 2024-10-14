@@ -129,6 +129,8 @@ pub enum AddHeaderError {
 }
 
 /// Checks for headers in files, like licenses or author attribution.
+///
+/// This is intended to be used via [`Header`], not called directly.
 pub trait HeaderChecker: Send + Clone {
     /// Return `true` if the file has the desired header, `false` otherwise.
     fn check(&self, file: &mut impl io::Read) -> io::Result<bool>;
@@ -223,10 +225,13 @@ impl FromIterator<FileResult> for FileResults {
 
 /// Recursively check for `header` in every file in `root` that matches `path_predicate`.
 ///
+/// Checking the discovered files is parallelized across `num_threads` threads.
+///
 /// [`globset`](https://crates.io/crates/globset) is a useful crate for ignoring unwanted files in
 /// `path_predicate`.
 ///
-/// Returns a [`FileResults`] object containing the paths without headers detected.
+/// Returns a [`FileResults`] object containing the paths without headers detected, and the paths
+/// which were not UTF-8 text.
 pub fn check_headers_recursively(
     root: &path::Path,
     path_predicate: impl Fn(&path::Path) -> bool,
@@ -294,6 +299,7 @@ pub enum CheckHeadersRecursivelyError {
 
 /// Add the provided `header` to any file in `root` that matches `path_predicate` and that doesn't
 /// already have a header as determined by `checker`.
+///
 /// Returns a list of paths that had headers added.
 pub fn add_headers_recursively(
     root: &path::Path,
@@ -306,13 +312,8 @@ pub fn add_headers_recursively(
     path_rx
         .into_iter()
         // keep the errors, or the ones with added headers
-        .filter_map(|p| {
-            match header.add_header_if_missing(&p).map_err(|e| match e {
-                AddHeaderError::IoError(p, e) => AddHeadersRecursivelyError::IoError(p, e),
-                AddHeaderError::UnrecognizedExtension(e) => {
-                    AddHeadersRecursivelyError::UnrecognizedExtension(e)
-                }
-            }) {
+        .filter_map(
+            |p| match header.add_header_if_missing(&p).map_err(|e| e.into()) {
                 Ok(added) => {
                     if added {
                         Some(Ok(p))
@@ -321,8 +322,8 @@ pub fn add_headers_recursively(
                     }
                 }
                 Err(e) => Some(Err(e)),
-            }
-        })
+            },
+        )
         .collect::<Result<Vec<_>, _>>()
 }
 
@@ -338,6 +339,15 @@ pub enum AddHeadersRecursivelyError {
     /// A file with an unrecognized extension was encountered at the path
     #[error("Unknown file extension: {0:?}")]
     UnrecognizedExtension(path::PathBuf),
+}
+
+impl From<AddHeaderError> for AddHeadersRecursivelyError {
+    fn from(value: AddHeaderError) -> Self {
+        match value {
+            AddHeaderError::IoError(p, e) => Self::IoError(p, e),
+            AddHeaderError::UnrecognizedExtension(p) => Self::UnrecognizedExtension(p),
+        }
+    }
 }
 
 /// Find all files starting from `root` that do not match the globs in `ignore`, publishing the
