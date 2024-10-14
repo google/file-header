@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use file_header::*;
-use std::{fs, path};
+use std::{fs, io, path};
 
 #[test]
 fn single_line_checker_finds_header_when_present() {
@@ -114,10 +114,23 @@ fn adds_header_after_magic_first_line() {
 }
 
 #[test]
-fn check_recursively() {
+fn header_present_on_binary_file_produces_error_invalid_data() {
+    let file = tempfile::Builder::new().suffix(".xml").tempfile().unwrap();
+    fs::write(file.path(), [0xFF_u8; 100]).unwrap();
+
+    assert_eq!(
+        io::ErrorKind::InvalidData,
+        test_header()
+            .header_present(&mut fs::File::open(file.path()).unwrap())
+            .unwrap_err()
+            .kind()
+    );
+}
+
+#[test]
+fn check_recursively_finds_no_header_file() {
     let header = test_header();
-    let mut root = path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    root.push("resources/test/example_check");
+    let root = path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test/example_check");
     let results = check_headers_recursively(&root, |_p| true, header, 4).unwrap();
     assert_eq!(
         vec![path::PathBuf::from("no_header.rs")],
@@ -130,29 +143,71 @@ fn check_recursively() {
 }
 
 #[test]
-fn add_recursively() {
+fn check_recursively_detects_binary_file() {
     let header = test_header();
 
     let root = tempfile::tempdir().unwrap();
 
-    let mut no_header = root.path().to_path_buf();
-    no_header.push("no_header.rs");
+    let no_header = root.path().join("no_header.rs");
     fs::write(&no_header, "// no header\n").unwrap();
 
-    let mut with_header = root.path().to_path_buf();
-    with_header.push("with_header.rs");
+    let binary = root.path().join("binary.rs");
+    fs::write(&binary, [0xFF; 100]).unwrap();
+
+    let results = check_headers_recursively(root.path(), |_p| true, header, 4).unwrap();
+    assert_eq!(
+        vec![path::PathBuf::from("no_header.rs")],
+        results
+            .no_header_files
+            .iter()
+            .map(|p| p.strip_prefix(&root).unwrap().to_path_buf())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        vec![path::PathBuf::from("binary.rs")],
+        results
+            .binary_files
+            .iter()
+            .map(|p| p.strip_prefix(&root).unwrap().to_path_buf())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn add_recursively_adds_where_needed() {
+    let header = test_header();
+
+    let root = tempfile::tempdir().unwrap();
+
+    let no_header = root.path().join("no_header.rs");
+    fs::write(&no_header, "// no header\n").unwrap();
+
+    let with_header = root.path().join("with_header.rs");
     let mut contents = "some license etc etc etc".to_string();
     contents.push_str("\n// has a header\n");
     fs::write(&with_header, &contents).unwrap();
 
+    // should not have header since it will fail the path predicate
+    let ignored = root.path().join("ignored.txt");
+    fs::write(&ignored, "// no header\n").unwrap();
+
     assert_eq!(
         vec![path::PathBuf::from("no_header.rs")],
-        add_headers_recursively(root.path(), |_| true, header)
-            .map(|paths| paths
-                .iter()
-                .map(|p| p.strip_prefix(&root).unwrap().to_path_buf())
-                .collect::<Vec<_>>())
-            .unwrap()
+        add_headers_recursively(
+            root.path(),
+            |p| p.extension().map(|ext| ext == "rs").unwrap_or(false),
+            header
+        )
+        .map(|paths| paths
+            .iter()
+            .map(|p| p.strip_prefix(&root).unwrap().to_path_buf())
+            .collect::<Vec<_>>())
+        .unwrap()
+    );
+
+    assert_eq!(
+        "// some license etc etc etc\n\n// no header\n",
+        String::from_utf8(fs::read(&no_header).unwrap()).unwrap()
     );
 }
 
