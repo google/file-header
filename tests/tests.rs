@@ -128,6 +128,124 @@ fn header_present_on_binary_file_produces_error_invalid_data() {
 }
 
 #[test]
+fn deletes_header_with_empty_delimiters() {
+    let file = tempfile::Builder::new().suffix(".rs").tempfile().unwrap();
+    fs::write(
+        file.path(),
+        r#"// some license etc etc etc
+
+not a license"#,
+    )
+    .unwrap();
+    let ok = test_header().delete_header_if_present(file.path()).unwrap();
+    assert!(ok);
+    assert_eq!("not a license", fs::read_to_string(file.path()).unwrap());
+}
+
+#[test]
+fn deletes_header_with_nonempty_delimiters() {
+    let file = tempfile::Builder::new().suffix(".c").tempfile().unwrap();
+    fs::write(
+        file.path(),
+        r#"/*
+ * some license etc etc etc
+ */
+
+not a license"#,
+    )
+    .unwrap();
+    let ok = test_header().delete_header_if_present(file.path()).unwrap();
+    assert!(ok);
+    assert_eq!("not a license", fs::read_to_string(file.path()).unwrap());
+}
+
+#[test]
+fn deletes_header_trim_trailing_whitespace() {
+    let file = tempfile::Builder::new().suffix(".c").tempfile().unwrap();
+    fs::write(
+        file.path(),
+        r#"/*
+ * some license
+ * line with trailing whitespace.
+ *
+ * etc
+ */
+
+not a license"#,
+    )
+    .unwrap();
+    let ok = test_header_with_blank_lines_and_trailing_whitespace()
+        .delete_header_if_present(file.path())
+        .unwrap();
+    assert!(ok);
+    assert_eq!("not a license", fs::read_to_string(file.path()).unwrap());
+}
+
+#[test]
+fn deletes_header_after_magic_first_line() {
+    let file = tempfile::Builder::new().suffix(".xml").tempfile().unwrap();
+    fs::write(
+        file.path(),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ some license etc etc etc
+-->
+
+<root />
+"#,
+    )
+    .unwrap();
+    let ok = test_header().delete_header_if_present(file.path()).unwrap();
+    assert!(ok);
+    assert_eq!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<root />
+"#,
+        fs::read_to_string(file.path()).unwrap()
+    );
+}
+
+#[test]
+fn deletes_header_without_touching_contents() {
+    let file = tempfile::Builder::new().suffix(".rs").tempfile().unwrap();
+    fs::write(
+        file.path(),
+        r#"// some license etc etc etc
+
+license in file:
+// some license etc etc etc
+
+
+contents after license"#,
+    )
+    .unwrap();
+    let ok = test_header().delete_header_if_present(file.path()).unwrap();
+    assert!(ok);
+    assert_eq!(
+        r#"license in file:
+// some license etc etc etc
+
+
+contents after license"#,
+        fs::read_to_string(file.path()).unwrap()
+    );
+}
+
+#[test]
+fn deletes_header_requires_exact_wrapped_header() {
+    let file = tempfile::Builder::new().suffix(".rs").tempfile().unwrap();
+    // does not have // prefix for the wrapped header, so the checker will find it, but it shouldn't
+    // actually be deleted
+    let orig = r#"some license etc etc etc
+
+not a license"#;
+    fs::write(file.path(), orig).unwrap();
+    let ok = test_header().delete_header_if_present(file.path()).unwrap();
+    assert!(!ok);
+    assert_eq!(orig, fs::read_to_string(file.path()).unwrap());
+}
+
+#[test]
 fn check_recursively_finds_no_header_file() {
     let header = test_header();
     let root = path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test/example_check");
@@ -208,6 +326,48 @@ fn add_recursively_adds_where_needed() {
     assert_eq!(
         "// some license etc etc etc\n\n// no header\n",
         String::from_utf8(fs::read(&no_header).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn doesnt_delete_header_when_missing() {
+    let file = tempfile::Builder::new().suffix(".rs").tempfile().unwrap();
+    let initial_content = "not a license";
+    fs::write(file.path(), initial_content).unwrap();
+    let ok = test_header().delete_header_if_present(file.path()).unwrap();
+    assert!(!ok);
+    assert_eq!(initial_content, fs::read_to_string(file.path()).unwrap());
+}
+
+#[test]
+fn delete_recursively() {
+    let header = test_header();
+
+    let root = tempfile::tempdir().unwrap();
+
+    let mut no_header = root.path().to_path_buf();
+    no_header.push("no_header.rs");
+    fs::write(&no_header, "// no header\n").unwrap();
+
+    let mut with_header = root.path().to_path_buf();
+    with_header.push("with_header.rs");
+    let mut contents = "// some license etc etc etc".to_string();
+    contents.push_str("\n\n// has a header\n");
+    fs::write(&with_header, &contents).unwrap();
+
+    assert_eq!(
+        vec![path::PathBuf::from("with_header.rs")],
+        delete_headers_recursively(root.path(), |_| true, header)
+            .map(|paths| paths
+                .iter()
+                .map(|p| p.strip_prefix(&root).unwrap().to_path_buf())
+                .collect::<Vec<_>>())
+            .unwrap()
+    );
+
+    assert_eq!(
+        "// has a header\n",
+        fs::read_to_string(with_header).unwrap()
     );
 }
 
