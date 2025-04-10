@@ -23,7 +23,6 @@ rustdoc-args = ["--generate-link-to-definition"]
 
 [dev-dependencies]
 tempfile = "3.13.0"
-globset = "0.4.15"
 
 [features]
 default = ["spdx", "license-offline"]
